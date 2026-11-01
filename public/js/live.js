@@ -402,7 +402,7 @@
     const liveText = document.getElementById('liveStatusText');
     if (st.tiktok?.connected) {
       liveDot.classList.add('connected');
-      liveText.textContent = `LIVE @${st.tiktok.username} • ${st.tiktok.viewerCount || 0} mắt`;
+      liveText.textContent = formatLiveText(st.tiktok);
     } else if (st.tiktok?.connecting) {
       liveDot.classList.remove('connected');
       liveText.textContent = `Đang kết nối @${st.tiktok.username}...`;
@@ -450,6 +450,20 @@
         .map((ev) => `<div class="event-feed-item">${formatEventSummary(ev)}</div>`)
         .join('');
     }
+  }
+
+  // Live chế độ Game: TikTok không gửi số mắt đang xem, chỉ có tổng lượt xem cả phiên
+  let lastTiktokState = null;
+  function formatLiveText(tiktok) {
+    lastTiktokState = tiktok;
+    const viewers = Number(tiktok.viewerCount || 0);
+    const total = Number(tiktok.totalViewers || 0);
+    const counter = viewers > 0
+      ? `${viewers.toLocaleString('vi-VN')} mắt`
+      : total > 0
+        ? `${total.toLocaleString('vi-VN')} lượt xem`
+        : 'đang đếm mắt...';
+    return `LIVE @${tiktok.username} • ${counter}`;
   }
 
   function formatEventSummary(ev) {
@@ -828,6 +842,10 @@
         } else if (msg.method === 'temple.event') {
           if (msg.params?.state) updateUIState(msg.params.state);
           if (msg.params?.event) triggerRitualVisuals(msg.params.event);
+        } else if (msg.method === 'temple.viewerCount') {
+          if (lastTiktokState?.connected) {
+            document.getElementById('liveStatusText').textContent = formatLiveText({ ...lastTiktokState, ...msg.params });
+          }
         } else if (msg.method === 'tts.play') {
           if (msg.params?.url) {
             audio.enqueueTts(msg.params.text || 'Nam mô A Di Đà Phật', {
@@ -888,9 +906,30 @@
   });
 
   document.getElementById('cardBlessing')?.addEventListener('click', () => {
-    const { user, wish } = getFormInput();
-    callRpc('temple.sendPrayer', { user, wish });
+    const { user } = getFormInput();
+    callRpc('temple.strikeWoodenFish', { user, count: 5 });
   });
+
+  // Thẻ "BÌNH LUẬN" xoay vòng các câu lệnh người xem gõ được (khớp với bộ đọc bình luận trên server)
+  const GUIDE_COMMANDS = [
+    { keyword: '“thắp hương”', result: 'Lên lư hương lạy Phật' },
+    { keyword: '“cầu …” + lời khấn', result: 'Thả đèn hoa đăng, đọc lời khấn' },
+    { keyword: '“xin xăm”', result: 'Gieo quẻ, xem giải quẻ' },
+    { keyword: '“thỉnh chuông”', result: 'Thỉnh Đại Hồng Chung' },
+    { keyword: '“nam mô a di đà phật”', result: 'Niệm Phật, thả hoa đăng' }
+  ];
+  let guideIndex = 0;
+  setInterval(() => {
+    const rotator = document.getElementById('guideCommentRotator');
+    if (!rotator) return;
+    rotator.classList.add('fading');
+    setTimeout(() => {
+      guideIndex = (guideIndex + 1) % GUIDE_COMMANDS.length;
+      document.getElementById('guideCommentKeyword').textContent = GUIDE_COMMANDS[guideIndex].keyword;
+      document.getElementById('guideCommentResult').textContent = GUIDE_COMMANDS[guideIndex].result;
+      rotator.classList.remove('fading');
+    }, 350);
+  }, 4500);
 
   document.getElementById('cardLotus')?.addEventListener('click', () => {
     const { user, wish } = getFormInput();

@@ -300,6 +300,7 @@ const DEFAULT_STATE = {
     username: 'zenfacts_vn',
     roomId: null,
     viewerCount: 0,
+    totalViewers: 0,
     lastError: null
   }
 };
@@ -1238,43 +1239,74 @@ async function connectTikTokLive(usernameOrUrl) {
     username: cleanUser,
     roomId: null,
     viewerCount: 0,
+    totalViewers: 0,
     lastError: null
   };
+  liveWatch.wanted = true;
+  liveWatch.lastDataAt = Date.now();
   broadcastNotification('temple.state', getPublicState());
 
-  tiktokConn = new TikTokLiveConnection(cleanUser, {
+  const conn = new TikTokLiveConnection(cleanUser, {
     processInitialData: true,
-    fetchRoomInfoOnConnect: false,
+    fetchRoomInfoOnConnect: true,
     enableExtendedGiftInfo: false
   });
+  tiktokConn = conn;
 
-  tiktokConn.on(ControlEvent.CONNECTED, (roomState) => {
+  conn.on(ControlEvent.CONNECTED, (roomState) => {
+    if (conn !== tiktokConn) return;
     state.tiktok.connected = true;
     state.tiktok.connecting = false;
-    state.tiktok.roomId = roomState?.roomId || tiktokConn?.roomId || null;
+    state.tiktok.roomId = roomState?.roomId || conn.roomId || null;
     state.tiktok.lastError = null;
     console.log(`[TikTok Live] Đã kết nối phòng @${cleanUser} (roomId: ${state.tiktok.roomId})`);
     broadcastNotification('temple.state', getPublicState());
   });
 
-  tiktokConn.on(ControlEvent.DISCONNECTED, () => {
+  // Kết nối cũ ngắt sau khi đã có kết nối mới thì bỏ qua, tránh báo nhầm là mất kết nối
+  conn.on(ControlEvent.DISCONNECTED, () => {
+    if (conn !== tiktokConn) return;
     state.tiktok.connected = false;
     state.tiktok.connecting = false;
     console.log(`[TikTok Live] Đã ngắt kết nối @${cleanUser}`);
     broadcastNotification('temple.state', getPublicState());
   });
 
-  tiktokConn.on(ControlEvent.ERROR, (err) => {
-    state.tiktok.lastError = err?.message || String(err);
-    console.warn('[TikTok Live Warning]', state.tiktok.lastError);
+  conn.on(WebcastEvent.STREAM_END, () => {
+    if (conn !== tiktokConn) return;
+    state.tiktok.connected = false;
+    console.log(`[TikTok Live] Phiên live @${cleanUser} đã kết thúc, sẽ tự kết nối lại khi có phiên mới`);
     broadcastNotification('temple.state', getPublicState());
   });
 
+  conn.on('decodedData', () => {
+    if (conn === tiktokConn) liveWatch.lastDataAt = Date.now();
+  });
+
+  // Thư viện gửi lỗi dạng { info, exception }: ghép lại thành câu đọc được, bỏ qua lỗi trùng lặp khi đang thử kết nối lại
+  conn.on(ControlEvent.ERROR, (err) => {
+    if (conn !== tiktokConn) return;
+    const detail = err?.exception?.message || err?.message || '';
+    const message = [err?.info, detail].filter(Boolean).join(': ') || String(err);
+    state.tiktok.lastError = message;
+    if (message !== liveWatch.lastLoggedError) {
+      liveWatch.lastLoggedError = message;
+      console.warn('[TikTok Live Warning]', message);
+    }
+    broadcastNotification('temple.state', getPublicState());
+  });
+
+  // Số mắt đang xem nằm ở viewerCount/total (live chế độ Game thường để 0); totalUser là tổng lượt xem cả phiên
   tiktokConn.on(WebcastEvent.ROOM_USER, (data) => {
-    const viewerCount = Number(data?.total ?? data?.viewerCount ?? 0);
-    if (viewerCount > 0) {
-      state.tiktok.viewerCount = viewerCount;
-      broadcastNotification('temple.viewerCount', { viewerCount });
+    const viewerCount = Number(data?.viewerCount || data?.total || 0);
+    const totalViewers = Number(data?.totalUser || 0);
+    if (viewerCount > 0) state.tiktok.viewerCount = viewerCount;
+    if (totalViewers > 0) state.tiktok.totalViewers = totalViewers;
+    if (viewerCount > 0 || totalViewers > 0) {
+      broadcastNotification('temple.viewerCount', {
+        viewerCount: state.tiktok.viewerCount,
+        totalViewers: state.tiktok.totalViewers
+      });
     }
   });
 
@@ -1319,13 +1351,21 @@ async function connectTikTokLive(usernameOrUrl) {
   });
 
   try {
-    const roomState = await tiktokConn.connect();
+    const roomState = await conn.connect();
+    if (conn !== tiktokConn) return state.tiktok;
     state.tiktok.connected = true;
     state.tiktok.connecting = false;
-    state.tiktok.roomId = roomState?.roomId || tiktokConn?.roomId || null;
+    state.tiktok.roomId = roomState?.roomId || conn.roomId || null;
+    const roomData = roomState?.roomInfo?.data || {};
+    const initialViewers = Number(roomData.user_count || roomData.stats?.watch_user_count || 0);
+    const initialTotal = Number(roomData.stats?.total_user || 0);
+    if (initialViewers > 0) state.tiktok.viewerCount = initialViewers;
+    if (initialTotal > 0) state.tiktok.totalViewers = initialTotal;
+    liveWatch.lastDataAt = Date.now();
     broadcastNotification('temple.state', getPublicState());
     return state.tiktok;
   } catch (err) {
+    if (conn !== tiktokConn) throw err;
     state.tiktok.connected = false;
     state.tiktok.connecting = false;
     state.tiktok.lastError = err?.message || 'Không thể kết nối phòng Live (kiểm tra tài khoản đang phát Live chưa)';
@@ -1334,7 +1374,33 @@ async function connectTikTokLive(usernameOrUrl) {
   }
 }
 
+// Tự giữ kết nối với phiên live hiện tại: kết nối lại khi mất kết nối, khi phiên cũ kết thúc
+// hoặc khi 3 phút không nhận được dữ liệu nào (thường là do đã mở phiên live mới với roomId khác)
+const liveWatch = { wanted: false, lastDataAt: 0, busy: false, retries: 0, lastLoggedError: '' };
+
+async function checkLiveConnection() {
+  if (!liveWatch.wanted || liveWatch.busy || state.tiktok.connecting || !state.tiktok.username) return;
+  const stale = state.tiktok.connected && Date.now() - liveWatch.lastDataAt > 3 * 60 * 1000;
+  if (state.tiktok.connected && !stale) return;
+  liveWatch.busy = true;
+  try {
+    // Chỉ báo lần đầu và mỗi 5 phút để cửa sổ server không bị trôi log khi kênh chưa phát live
+    if (stale || liveWatch.retries % 10 === 0) {
+      console.log(`[TikTok Live] ${stale ? 'Không nhận được dữ liệu 3 phút' : 'Kênh chưa phát live'}, đang chờ và thử kết nối lại @${state.tiktok.username} mỗi 30 giây...`);
+    }
+    liveWatch.retries += 1;
+    await connectTikTokLive(state.tiktok.username);
+    liveWatch.retries = 0;
+    liveWatch.lastLoggedError = '';
+  } catch (err) {
+    // Kênh chưa phát live: thử lại ở lượt kiểm tra sau
+  } finally {
+    liveWatch.busy = false;
+  }
+}
+
 function disconnectTikTokLive() {
+  liveWatch.wanted = false;
   if (tiktokConn) {
     try {
       tiktokConn.disconnect();
@@ -1344,6 +1410,7 @@ function disconnectTikTokLive() {
   state.tiktok.connected = false;
   state.tiktok.connecting = false;
   state.tiktok.viewerCount = 0;
+  state.tiktok.totalViewers = 0;
   broadcastNotification('temple.state', getPublicState());
   return state.tiktok;
 }
@@ -1602,6 +1669,7 @@ server.listen(PORT, () => {
   // Theo dõi sang ngày mới / ngày lễ để đổi giao diện Chánh Điện & đọc lời chào
   checkFestivalChange();
   setInterval(checkFestivalChange, 60 * 1000);
+  setInterval(checkLiveConnection, 30 * 1000);
 
   // Tự động kết nối tới @zenfacts_vn ngay khi khởi động server
   const defaultChannel = process.env.TIKTOK_USER || state.tiktok?.username || 'zenfacts_vn';

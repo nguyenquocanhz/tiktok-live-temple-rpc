@@ -1415,3 +1415,32 @@ body.obs-mode .stage-wrapper {
   10%, 80% { opacity: 1; transform: translateY(0); }
   100% { opacity: 0; transform: translateY(-12px); }
 }
+
+/* Thẻ hướng dẫn người xem tương tác (thay cho thẻ giá xu cũ dưới HUD) */
+.guide-card {
+  justify-content: flex-start;
+  gap: 6px;
+}
+.guide-rotator {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: opacity 0.35s ease;
+}
+.guide-rotator.fading {
+  opacity: 0;
+}
+.guide-keyword {
+  font-size: 21px;
+  font-weight: 800;
+  color: var(--gold-bright);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.guide-result {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--ivory);
+}
