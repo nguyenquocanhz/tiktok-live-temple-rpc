@@ -88,9 +88,15 @@
     { x: 940, y: 1188, rank: 6 }
   ];
 
+  let lastVipSignature = '';
+
   function renderVipCushions(leaderboard = []) {
     const layer = document.getElementById('vipCushionsLayer');
     if (!layer) return;
+    // Chỉ dựng lại khi Top 6 đổi tên/thứ hạng, tránh tạo lại ảnh gây chớp mỗi lần có tim
+    const sig = leaderboard.slice(0, 6).map((d) => d.name).join('|');
+    if (sig === lastVipSignature && layer.children.length > 0) return;
+    lastVipSignature = sig;
 
     layer.innerHTML = VIP_CUSHION_COORDS.map((slot, idx) => {
       const dev = leaderboard[idx];
@@ -209,6 +215,7 @@
     img.src = url;
   });
 
+  // Vái lạy bằng CSS transform trên ảnh có sẵn: không đổi src nên không bị chớp khi ảnh giải mã lại
   function pulseHallBowing() {
     if (!congregationHall) return;
     const seats = congregationHall.querySelectorAll('.hall-seat');
@@ -216,12 +223,10 @@
       if (i % 4 !== 0) return;
       const img = el.querySelector('.devotee-sprite');
       if (!img) return;
-      const delay = (i % 4) * 80;
-      setTimeout(() => { img.src = SPRITE_FRAMES.forehead; }, delay);
-      setTimeout(() => { img.src = SPRITE_FRAMES.bowMid; }, delay + 140);
-      setTimeout(() => { img.src = SPRITE_FRAMES.prostrateDeep; }, delay + 300);
-      setTimeout(() => { img.src = SPRITE_FRAMES.bowMid; }, delay + 620);
-      setTimeout(() => { img.src = SPRITE_FRAMES.kneel; }, delay + 780);
+      img.classList.remove('bowing');
+      void img.offsetWidth;
+      img.style.animationDelay = `${(i % 8) * 0.04}s`;
+      img.classList.add('bowing');
     });
   }
 
@@ -435,6 +440,9 @@
     }
 
 
+    updateCalendarUI(st.calendar);
+    updateChantGoalUI(st.chant);
+
     const feed = document.getElementById('eventFeed');
     if (feed && Array.isArray(st.recentEvents)) {
       feed.innerHTML = st.recentEvents
@@ -459,6 +467,12 @@
         return `🪷 <strong>${escapeHtml(ev.user)}</strong> dâng <em>${escapeHtml(ev.giftName)}</em> (+${ev.merit} CĐ)`;
       case 'drawFortune':
         return `🎋 <strong>${escapeHtml(ev.user)}</strong> gieo được Quẻ số ${ev.fortune?.number} (${ev.fortune?.rank})`;
+      case 'chantStart':
+        return `📿 Đạo tràng tụng <em>${escapeHtml(ev.sutraTitle)}</em> (${ev.contributorCount} thí chủ góp mõ)`;
+      case 'memberJoin':
+        return `🙏 <strong>${escapeHtml(ev.user)}</strong> vừa vào Chánh Điện`;
+      case 'festivalStart':
+        return `🌕 Hôm nay là <strong>${escapeHtml(ev.festival?.name)}</strong> • Công đức x${ev.festival?.multiplier}`;
       default:
         return `✨ <strong>${escapeHtml(ev.user || 'Thí chủ')}</strong> tương tác`;
     }
@@ -559,7 +573,195 @@
         });
         break;
       }
+
+      case 'festivalStart': {
+        audio.playTempleBell(1.1);
+        particles.spawnGrandCeremonyRain();
+        showFestivalBanner(ev.festival, ev.lunarLabel);
+        break;
+      }
+
+      case 'chantStart': {
+        enqueueChant(ev);
+        break;
+      }
+
+      case 'memberJoin': {
+        showWelcomeToast(ev.user, ev.avatar);
+        break;
+      }
     }
+  }
+
+  function showWelcomeToast(user, avatar) {
+    const layer = document.getElementById('welcomeToastLayer');
+    if (!layer) return;
+    while (layer.children.length >= 3) {
+      layer.firstElementChild.remove();
+    }
+    const toast = document.createElement('div');
+    toast.className = 'welcome-toast';
+    toast.innerHTML = `
+      <span class="welcome-avatar">${
+        avatar ? `<img src="${escapeHtml(avatar)}" alt="" />` : escapeHtml(String(user || '🙏').charAt(0).toUpperCase())
+      }</span>
+      <span>🙏 <strong>${escapeHtml(shortenName(user, 18))}</strong> vừa vào Chánh Điện</span>
+    `;
+    layer.appendChild(toast);
+    setTimeout(() => toast.remove(), 4200);
+  }
+
+  // 7B. LỊCH ÂM & NGÀY LỄ: đổi sắc màu Chánh Điện, banner chào mừng, mưa hoa sen ngày đại lễ
+  const stageEl = document.getElementById('stage9x16');
+  let currentFestivalKey = null;
+  let festivalRainTimer = null;
+  let festivalBannerTimer = null;
+
+  function updateCalendarUI(cal) {
+    if (!cal) return;
+    const fest = cal.festival;
+    const lunarText = document.getElementById('calendarLunarText');
+    const festEl = document.getElementById('calendarFestival');
+    const moonEl = document.getElementById('calendarMoon');
+
+    if (lunarText) lunarText.textContent = `Âm lịch ${cal.lunar.day}/${cal.lunar.month}${cal.lunar.leap ? ' nhuận' : ''} ${cal.lunar.canChi}`;
+    if (moonEl) moonEl.textContent = cal.lunar.day >= 14 && cal.lunar.day <= 16 ? '🌕' : cal.lunar.day <= 2 ? '🌑' : '🌙';
+    if (festEl) {
+      festEl.textContent = fest ? `• ${fest.name} • Công đức x${fest.multiplier}` : '';
+      festEl.classList.toggle('visible', Boolean(fest));
+    }
+
+    const key = fest ? fest.key : '';
+    if (key === currentFestivalKey) return;
+    const isFirstRender = currentFestivalKey === null;
+    currentFestivalKey = key;
+
+    if (stageEl) {
+      if (fest) stageEl.setAttribute('data-festival-theme', fest.theme);
+      else stageEl.removeAttribute('data-festival-theme');
+    }
+
+    clearInterval(festivalRainTimer);
+    festivalRainTimer = null;
+    if (fest && fest.major) {
+      festivalRainTimer = setInterval(() => particles.spawnGrandCeremonyRain(), 150000);
+    }
+    // Mở trang đúng ngày lễ: chào mừng một lần (khi sang ngày lễ, server gửi sự kiện festivalStart)
+    if (fest && isFirstRender) {
+      setTimeout(() => showFestivalBanner(fest, cal.lunarLabel), 1200);
+    }
+  }
+
+  function showFestivalBanner(fest, lunarLabel) {
+    if (!fest) return;
+    const banner = document.getElementById('festivalBanner');
+    if (!banner) return;
+    document.getElementById('festivalBannerTitle').textContent = `🪷 ${fest.name.toUpperCase()} 🪷`;
+    document.getElementById('festivalBannerSub').textContent = `${fest.greeting}${lunarLabel && !fest.overridden ? ` • Âm lịch ${lunarLabel}` : ''}`;
+    document.getElementById('festivalBannerBonus').textContent = `✨ Công đức hôm nay x${fest.multiplier}`;
+    banner.classList.add('visible');
+    clearTimeout(festivalBannerTimer);
+    festivalBannerTimer = setTimeout(() => banner.classList.remove('visible'), 7500);
+  }
+
+  // 7C. MỤC TIÊU CỘNG ĐỒNG & TỤNG KINH TẬP THỂ (chữ kinh chạy theo giọng đọc)
+  function updateChantGoalUI(chant) {
+    if (!chant) return;
+    const bar = document.getElementById('chantGoalBar');
+    const fill = document.getElementById('chantGoalFill');
+    const title = document.getElementById('chantGoalTitle');
+    const count = document.getElementById('chantGoalCount');
+    const ratio = chant.goal > 0 ? Math.min(1, chant.progress / chant.goal) : 0;
+
+    if (fill) fill.style.width = `${(ratio * 100).toFixed(1)}%`;
+    const goalInput = document.getElementById('inputChantGoal');
+    if (goalInput && document.activeElement !== goalInput) goalInput.value = String(chant.goal);
+    if (bar) {
+      bar.classList.toggle('near-goal', ratio >= 0.85 && !chant.active);
+      bar.classList.toggle('chanting', Boolean(chant.active));
+    }
+    if (chant.active) {
+      if (title) title.textContent = 'Đạo tràng đang tụng kinh';
+      if (count) count.textContent = 'Nam Mô A Di Đà Phật 🙏';
+    } else {
+      if (title) title.textContent = `Cùng tụng ${chant.nextTitle}`;
+      if (count) {
+        count.textContent = `${Number(chant.progress).toLocaleString('vi-VN')} / ${Number(chant.goal).toLocaleString('vi-VN')} nhịp mõ`;
+      }
+    }
+  }
+
+  const chantQueue = [];
+  let chantPlaying = false;
+
+  function enqueueChant(ev) {
+    if (!ev || !Array.isArray(ev.lines) || ev.lines.length === 0) return;
+    chantQueue.push(ev);
+    if (!chantPlaying) playNextChant();
+  }
+
+  function setChantLines(lines, idx) {
+    document.getElementById('chantLinePrev').textContent = lines[idx - 1] || '';
+    document.getElementById('chantLineCurrent').textContent = lines[idx] || '';
+    document.getElementById('chantLineNext').textContent = lines[idx + 1] || '';
+  }
+
+  async function playNextChant() {
+    const ev = chantQueue.shift();
+    if (!ev) {
+      chantPlaying = false;
+      return;
+    }
+    chantPlaying = true;
+
+    const panel = document.getElementById('chantPanel');
+    const currentEl = document.getElementById('chantLineCurrent');
+    const footEl = document.getElementById('chantPanelFoot');
+    const voice = ev.ttsVoice || 'maichi';
+    const lines = [...ev.lines, ev.thanksText].filter(Boolean);
+
+    document.getElementById('chantPanelTitle').textContent = `📿 ${ev.sutraTitle}`;
+    const top = (ev.topContributors || []).slice(0, 3).map((c) => c.name).join(', ');
+    footEl.textContent = ev.contributorCount
+      ? `🙏 ${ev.contributorCount} thí chủ góp mõ${top ? ` • ${top}` : ''} • +${ev.bonus} CĐ mỗi vị`
+      : `🙏 Hồi hướng công đức cho tất cả chúng sanh`;
+    setChantLines(lines, -1);
+    panel.classList.add('visible');
+
+    await audio.beginChant();
+    audio.playTempleBell(1.0);
+    particles.spawnBellWave(540, 510, 3);
+    pulseHallBowing();
+    await new Promise((resolve) => setTimeout(resolve, 1800));
+
+    // Tổng hợp trước tối đa 2 dòng kế tiếp để giọng tụng liền mạch
+    const prefetch = new Map();
+    const ensurePrefetch = (i) => {
+      if (i < lines.length && !prefetch.has(i) && audio.ttsEnabled) {
+        prefetch.set(i, audio.fetchZeroTtsAudio(lines[i], voice));
+      }
+    };
+
+    for (let i = 0; i < lines.length; i++) {
+      ensurePrefetch(i);
+      ensurePrefetch(i + 1);
+      ensurePrefetch(i + 2);
+      setChantLines(lines, i);
+      currentEl.classList.add('speaking');
+      audio.playWoodenFish(0.92);
+      if (i % 3 === 0) pulseHallBowing();
+      await audio.playChantLine(lines[i], voice, prefetch.get(i));
+      currentEl.classList.remove('speaking');
+      await new Promise((resolve) => setTimeout(resolve, 280));
+    }
+
+    audio.playTempleBell(1.1);
+    particles.spawnGrandCeremonyRain();
+    pulseHallBowing();
+    await new Promise((resolve) => setTimeout(resolve, 2200));
+    panel.classList.remove('visible');
+    audio.endChant();
+    playNextChant();
   }
 
   function spawnSkyLantern(user, wish) {
@@ -767,6 +969,42 @@
     const username = document.getElementById('inputTikTokUser')?.value.trim();
     if (!username) return;
     callRpc('live.connect', { username });
+  });
+
+  // Lịch âm, ngày lễ & tụng kinh trên Quick Dock
+  (async function initCalendarDock() {
+    const selectFestival = document.getElementById('selectFestival');
+    const selectSutra = document.getElementById('selectSutra');
+    if (!selectFestival || !selectSutra) return;
+    try {
+      const res = await fetch('/rpc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: rpcId++, method: 'temple.getCalendar', params: {} })
+      });
+      const cal = (await res.json())?.result;
+      if (!cal) return;
+      cal.festivals.forEach((f) => {
+        selectFestival.insertAdjacentHTML('beforeend', `<option value="${escapeHtml(f.key)}">Xem trước: ${escapeHtml(f.name)} (x${f.multiplier})</option>`);
+      });
+      cal.sutras.forEach((s) => {
+        selectSutra.insertAdjacentHTML('beforeend', `<option value="${escapeHtml(s.key)}">${escapeHtml(s.title)}</option>`);
+      });
+      if (cal.festival?.overridden) selectFestival.value = cal.festival.key;
+    } catch (_) {}
+
+    selectFestival.addEventListener('change', () => {
+      callRpc('temple.setFestival', { key: selectFestival.value });
+    });
+  })();
+
+  document.getElementById('btnStartChant')?.addEventListener('click', () => {
+    callRpc('temple.startChant', { sutra: document.getElementById('selectSutra')?.value || '' });
+  });
+
+  document.getElementById('btnSetChantGoal')?.addEventListener('click', () => {
+    const goal = Number(document.getElementById('inputChantGoal')?.value);
+    if (goal >= 20) callRpc('temple.updateSettings', { chantGoal: Math.round(goal) });
   });
 
   let autoSimState = false;

@@ -6,6 +6,8 @@ const { spawn } = require('child_process');
 const cors = require('cors');
 const { WebSocketServer } = require('ws');
 const { TikTokLiveConnection, WebcastEvent, ControlEvent } = require('tiktok-live-connector');
+const { getCalendarInfo, FESTIVALS } = require('./lunar');
+const { SUTRAS, DEDICATION_LINES, pickSutra, estimateLineSeconds } = require('./chants');
 
 const PORT = process.env.PORT || 3000;
 const DATA_DIR = path.join(__dirname, 'data');
@@ -119,9 +121,12 @@ class ZeroTTSManager {
   }
 
   resolvePythonBin() {
-    const venvPy = path.join(__dirname, '.venv', 'bin', 'python');
+    const isWin = process.platform === 'win32';
+    const venvPy = isWin
+      ? path.join(__dirname, '.venv', 'Scripts', 'python.exe')
+      : path.join(__dirname, '.venv', 'bin', 'python');
     if (fs.existsSync(venvPy)) return venvPy;
-    return 'python3';
+    return isWin ? 'python' : 'python3';
   }
 
   startWorker() {
@@ -130,9 +135,22 @@ class ZeroTTSManager {
     console.log(`[ZeroTTS] Khởi chạy worker với ${pyBin} (Giọng mặc định: Mai Chi)...`);
 
     this.status = 'loading';
-    this.proc = spawn(pyBin, [scriptPath], {
-      cwd: __dirname,
-      stdio: ['pipe', 'pipe', 'pipe']
+    try {
+      this.proc = spawn(pyBin, [scriptPath], {
+        cwd: __dirname,
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+    } catch (err) {
+      // Bun ném lỗi ngay khi không tìm thấy Python: chạy tiếp không có giọng đọc thay vì sập server
+      console.warn(`[ZeroTTS] Không khởi chạy được worker (${err.message}). Server vẫn chạy, tạm tắt giọng đọc.`);
+      this.proc = null;
+      this.status = 'unavailable';
+      return;
+    }
+    this.proc.on('error', (err) => {
+      console.warn(`[ZeroTTS] Lỗi worker: ${err.message}`);
+      this.ready = false;
+      this.status = 'unavailable';
     });
 
     this.proc.stdout.on('data', (chunk) => {
@@ -264,7 +282,13 @@ const DEFAULT_STATE = {
     sfxEnabled: true,
     smokeDensity: 1.0,
     autoSim: false,
-    autoSimIntervalMs: 9500
+    autoSimIntervalMs: 9500,
+    chantGoal: 300,
+    festivalOverride: ''
+  },
+  chant: {
+    progress: 0,
+    round: 0
   },
   tiktok: {
     connected: false,
@@ -286,6 +310,7 @@ function loadState() {
         devotees: saved.devotees || {},
         offerings: { ...DEFAULT_STATE.offerings, ...(saved.offerings || {}) },
         settings: { ...DEFAULT_STATE.settings, ...(saved.settings || {}) },
+        chant: { ...DEFAULT_STATE.chant, ...(saved.chant || {}) },
         tiktok: { ...DEFAULT_STATE.tiktok }
       };
     }
@@ -311,7 +336,8 @@ function saveState() {
       activeIncenseSticks: state.activeIncenseSticks,
       offerings: state.offerings,
       devotees: state.devotees,
-      settings: state.settings
+      settings: state.settings,
+      chant: { progress: state.chant.progress, round: state.chant.round }
     };
     fs.promises.writeFile(STATE_FILE, JSON.stringify(toSave, null, 2), 'utf8').catch((e) => {
       console.error('[State] Lỗi lưu file:', e.message);
@@ -445,13 +471,163 @@ function getPublicState() {
     recentEvents: state.recentEvents.slice(0, 15),
     settings: state.settings,
     tiktok: state.tiktok,
+    calendar: getCalendar(),
+    chant: getPublicChant(),
     tts: zeroTts ? zeroTts.getStatus() : { ready: false, status: 'init', voice: 'maichi' }
   };
+}
+
+
+// ============================================================================
+// 3B. LỊCH ÂM, NGÀY LỄ PHẬT GIÁO & TỤNG KINH TẬP THỂ
+// ============================================================================
+let calendarCache = { stamp: '', info: null };
+function getCalendar() {
+  const override = state.settings.festivalOverride || '';
+  const stamp = `${new Date().toISOString().slice(0, 16)}|${override}`;
+  if (calendarCache.stamp !== stamp) {
+    calendarCache = { stamp, info: getCalendarInfo(new Date(), override) };
+  }
+  return calendarCache.info;
+}
+
+// Nhân điểm công đức theo ngày lễ (Rằm/Mùng Một x2, Đại lễ x3)
+function festivalMerit(baseMerit) {
+  return Math.round(baseMerit * getCalendar().multiplier);
+}
+
+let lastFestivalSignature = null;
+function checkFestivalChange() {
+  const cal = getCalendar();
+  const signature = `${cal.solarLabel}|${cal.festival?.key || ''}`;
+  if (lastFestivalSignature === null) {
+    lastFestivalSignature = signature;
+    return;
+  }
+  if (signature === lastFestivalSignature) return;
+  lastFestivalSignature = signature;
+
+  if (!cal.festival) {
+    broadcastNotification('temple.state', getPublicState());
+    return;
+  }
+  const event = pushEventLog({
+    type: 'festivalStart',
+    user: 'Chánh Điện',
+    festival: cal.festival,
+    lunarLabel: cal.lunarLabel,
+    ttsText: `Hôm nay là ${cal.festival.name}, ngày ${cal.lunar.day} tháng ${cal.lunar.month} âm lịch. ${cal.festival.greeting}. Mọi công đức trong ngày hôm nay được nhân ${cal.multiplier}.`,
+    ttsVoice: state.settings.ttsVoice || 'maichi'
+  });
+  broadcastNotification('temple.event', { event, state: getPublicState() });
+}
+
+const chantRun = { active: false, timer: null, contributors: new Map() };
+
+function getChantGoal() {
+  return Math.max(20, Math.min(100000, Number(state.settings.chantGoal) || 300));
+}
+
+function getPublicChant() {
+  const goal = getChantGoal();
+  const nextSutra = pickSutra(state.chant.round, getCalendar().festival?.key);
+  return {
+    progress: Math.min(goal, state.chant.progress),
+    goal,
+    round: state.chant.round,
+    active: chantRun.active,
+    nextTitle: nextSutra.title,
+    contributorCount: chantRun.contributors.size
+  };
+}
+
+// Nhịp mõ góp vào buổi tụng kinh: tim = 1, bình luận = 5, chuông = 10, mỗi xu quà = 5
+function addChantProgress(points, devotee) {
+  if (!points || points <= 0) return;
+  state.chant.progress += points;
+  if (devotee) {
+    const key = devotee.uniqueId || devotee.name;
+    const entry = chantRun.contributors.get(key) || { devotee, points: 0 };
+    entry.devotee = devotee;
+    entry.points += points;
+    chantRun.contributors.set(key, entry);
+  }
+  if (!chantRun.active && state.chant.progress >= getChantGoal()) {
+    // Phát sự kiện tụng kinh sau sự kiện nghi thức vừa xảy ra
+    setImmediate(() => {
+      if (!chantRun.active && state.chant.progress >= getChantGoal()) startChant();
+    });
+  }
+}
+
+function startChant(params = {}) {
+  if (chantRun.active) {
+    throw new Error('Đạo tràng đang tụng kinh, vui lòng chờ buổi tụng hiện tại kết thúc');
+  }
+  const goal = getChantGoal();
+  const manual = Boolean(params.manual);
+  if (!manual && state.chant.progress < goal) return null;
+
+  const calendar = getCalendar();
+  const sutra = SUTRAS.find((s) => s.key === params.sutra) || pickSutra(state.chant.round, calendar.festival?.key);
+  const contributors = [...chantRun.contributors.values()]
+    .sort((a, b) => b.points - a.points)
+    .map((c) => ({ ...c, name: c.devotee.name, avatar: c.devotee.avatar }));
+  chantRun.contributors = new Map();
+  if (!manual) state.chant.progress -= goal;
+  state.chant.round += 1;
+  chantRun.active = true;
+
+  // Cộng thẳng vào bản ghi đã có của từng thí chủ (tránh tạo trùng tên trên Bảng Vàng)
+  const bonus = festivalMerit(20);
+  contributors.forEach((c) => {
+    c.devotee.merit += bonus;
+    state.totalMerit += bonus;
+  });
+  const topNames = contributors.slice(0, 3).map((c) => c.name);
+  const thanksText = contributors.length
+    ? `Cảm tạ ${contributors.length} thí chủ đã cùng góp nhịp mõ tụng kinh${topNames.length ? `, đặc biệt là ${topNames.join(', ')}` : ''}. Mỗi vị được thêm ${bonus} điểm công đức. Nam Mô A Di Đà Phật.`
+    : 'Nguyện cầu chúng sanh an lạc, thế giới hòa bình. Nam Mô A Di Đà Phật.';
+
+  const lines = [...sutra.lines, ...DEDICATION_LINES];
+  const estimatedSeconds = [...lines, thanksText].reduce((sum, line) => sum + estimateLineSeconds(line) + 0.4, 0);
+  const durationMs = Math.round((estimatedSeconds * 1.3 + 8) * 1000);
+
+  const event = pushEventLog({
+    type: 'chantStart',
+    user: topNames[0] || 'Đạo Tràng',
+    sutraKey: sutra.key,
+    sutraTitle: sutra.title,
+    lines,
+    thanksText,
+    contributorCount: contributors.length,
+    topContributors: contributors.slice(0, 5).map((c) => ({ name: c.name, avatar: c.avatar || '', points: c.points })),
+    bonus,
+    round: state.chant.round,
+    festivalName: calendar.festival?.name || '',
+    ttsVoice: state.settings.ttsVoice || 'maichi'
+  });
+
+  clearTimeout(chantRun.timer);
+  chantRun.timer = setTimeout(finishChant, durationMs);
+  saveState();
+  broadcastNotification('temple.event', { event, state: getPublicState() });
+  return { event, state: getPublicState() };
+}
+
+function finishChant() {
+  chantRun.active = false;
+  chantRun.timer = null;
+  broadcastNotification('temple.state', getPublicState());
+  if (state.chant.progress >= getChantGoal()) startChant();
 }
 
 // ============================================================================
 // 4. NGHI THỨC TƯƠNG TÁC (RITUAL HANDLERS)
 // ============================================================================
+const memberGreetMap = new Map();
+let lastMemberGreetAt = 0;
+
 const Rituals = {
   burnIncense(params = {}) {
     const user = sanitizeUserName(params.user);
@@ -459,11 +635,12 @@ const Rituals = {
     const avatar = params.avatar || '';
     const count = Math.max(1, Math.min(9, Number(params.count) || 3));
     const wish = sanitizeWishText(params.wish) || 'Thành tâm dâng hương bái Phật, cầu bình an cát tường';
-    const merit = count * 5;
+    const merit = festivalMerit(count * 5);
 
     state.totalIncense += count;
     state.activeIncenseSticks = Math.min(36, state.activeIncenseSticks + count);
     const devotee = recordDevotee(user, uniqueId, avatar, merit, count, 0, wish);
+    addChantProgress(5, devotee);
 
     const ttsText = params.readTts === false
       ? ''
@@ -491,10 +668,11 @@ const Rituals = {
     const uniqueId = params.uniqueId || '';
     const avatar = params.avatar || '';
     const count = Math.max(1, Math.min(50, Number(params.count) || 1));
-    const merit = count;
+    const merit = festivalMerit(count);
 
     state.woodenFishHits += count;
     const devotee = recordDevotee(user, uniqueId, avatar, merit, 0, 0);
+    addChantProgress(count, devotee);
 
     const event = pushEventLog({
       type: 'strikeWoodenFish',
@@ -517,10 +695,11 @@ const Rituals = {
     const avatar = params.avatar || '';
     const count = Math.max(1, Math.min(9, Number(params.count) || 1));
     const wish = sanitizeWishText(params.wish) || 'Thỉnh chuông Bát Nhã, phiền não tiêu tan, trí tuệ sáng ngời';
-    const merit = count * 10;
+    const merit = festivalMerit(count * 10);
 
     state.bellRings += count;
     const devotee = recordDevotee(user, uniqueId, avatar, merit, 0, 0, wish);
+    addChantProgress(count * 10, devotee);
 
     const ttsText = params.readTts
       ? `Thí chủ ${devotee.name} thỉnh Đại Hồng Chung cầu nguyện: ${wish}.`
@@ -548,10 +727,11 @@ const Rituals = {
     const uniqueId = params.uniqueId || '';
     const avatar = params.avatar || '';
     const wish = sanitizeWishText(params.wish) || 'Cầu cho quốc thái dân an, gia đình mạnh khỏe hạnh phúc';
-    const merit = 10;
+    const merit = festivalMerit(10);
 
     state.lanternCount += 1;
     const devotee = recordDevotee(user, uniqueId, avatar, merit, 1, 0, wish);
+    addChantProgress(5, devotee);
 
     const ttsText = params.readTts === false
       ? ''
@@ -590,7 +770,7 @@ const Rituals = {
     };
     const giftName = params.giftName || giftLabels[giftType];
     const multiplier = coins >= 100 ? 50 : coins >= 10 ? 30 : 20;
-    const merit = Math.max(20, coins * multiplier);
+    const merit = festivalMerit(Math.max(20, coins * multiplier));
 
     state.offerings[giftType] = (state.offerings[giftType] || 0) + 1;
     state.totalIncense += 3;
@@ -598,6 +778,7 @@ const Rituals = {
 
     const wish = params.wish || `Dâng cúng ${giftName} lên Tam Bảo`;
     const devotee = recordDevotee(user, uniqueId, avatar, merit, 3, 1, wish);
+    addChantProgress(coins * 5, devotee);
 
     const ttsText = params.readTts === false
       ? ''
@@ -628,10 +809,11 @@ const Rituals = {
     const avatar = params.avatar || '';
     const topic = sanitizeWishText(params.topic) || 'Gia đạo, Tài lộc và Bình an';
     const fortune = FORTUNE_DECK[Math.floor(Math.random() * FORTUNE_DECK.length)];
-    const merit = 10;
+    const merit = festivalMerit(10);
 
     state.fortuneCount += 1;
     const devotee = recordDevotee(user, uniqueId, avatar, merit, 0, 0, `Xin xăm: Quẻ số ${fortune.number} (${fortune.rank})`);
+    addChantProgress(5, devotee);
 
     const ttsText = params.readTts === false
       ? ''
@@ -654,6 +836,33 @@ const Rituals = {
     return { event, state: getPublicState() };
   },
 
+  // Người xem vào phòng Live: chào mừng trên màn hình (mỗi người 10 phút/lần, cả phòng tối đa 1 lời chào/2 giây)
+  memberJoin(params = {}) {
+    const uniqueId = params.uniqueId || '';
+    const devotee = recordDevotee(params.user, uniqueId, params.avatar || '', festivalMerit(1), 0, 0, 'Đã vào Chánh Điện lễ Phật');
+    const now = Date.now();
+    const key = uniqueId || devotee.name;
+    const lastGreet = memberGreetMap.get(key) || 0;
+    if (now - lastGreet < 10 * 60 * 1000 || now - lastMemberGreetAt < 2000) {
+      broadcastNotification('temple.state', getPublicState());
+      return { greeted: false, state: getPublicState() };
+    }
+    memberGreetMap.set(key, now);
+    lastMemberGreetAt = now;
+    if (memberGreetMap.size > 2000) {
+      memberGreetMap.delete(memberGreetMap.keys().next().value);
+    }
+    const event = {
+      id: `join_${now}`,
+      type: 'memberJoin',
+      user: devotee.name,
+      avatar: devotee.avatar,
+      merit: festivalMerit(1)
+    };
+    broadcastNotification('temple.event', { event, state: getPublicState() });
+    return { greeted: true, event, state: getPublicState() };
+  },
+
   grandCeremony(params = {}) {
     return this.offerGift({
       ...params,
@@ -673,6 +882,12 @@ const Rituals = {
     }
     saveState();
     broadcastNotification('temple.state', getPublicState());
+    if (params.festivalOverride !== undefined) {
+      checkFestivalChange();
+    }
+    if (params.chantGoal !== undefined && !chantRun.active && state.chant.progress >= getChantGoal()) {
+      startChant();
+    }
     return getPublicState();
   },
 
@@ -687,6 +902,8 @@ const Rituals = {
     state.offerings = { lotus: 1, fruit: 1, lamp: 1, dragon: 0 };
     state.devotees = {};
     state.recentEvents = [];
+    state.chant.progress = 0;
+    chantRun.contributors = new Map();
     saveState();
     broadcastNotification('temple.state', getPublicState());
     return getPublicState();
@@ -891,8 +1108,7 @@ async function connectTikTokLive(usernameOrUrl) {
 
   tiktokConn.on(WebcastEvent.MEMBER, (data) => {
     const { user, uniqueId, avatar } = extractUserFromEvent(data);
-    recordDevotee(user, uniqueId, avatar, 1, 0, 0, 'Đã vào Chánh Điện lễ Phật');
-    broadcastNotification('temple.state', getPublicState());
+    Rituals.memberJoin({ user, uniqueId, avatar });
   });
 
   tiktokConn.on(WebcastEvent.CHAT, (data) => {
@@ -1074,6 +1290,18 @@ async function handleRpcCall(method, params = {}) {
       }
       return res;
     }
+    case 'temple.getCalendar':
+      return {
+        ...getCalendar(),
+        festivals: Object.entries(FESTIVALS).map(([key, f]) => ({ key, name: f.name, multiplier: f.multiplier })),
+        sutras: SUTRAS.map((s) => ({ key: s.key, title: s.title }))
+      };
+    case 'temple.setFestival':
+      return Rituals.updateSettings({ festivalOverride: FESTIVALS[params.key] ? params.key : '' });
+    case 'temple.memberJoin':
+      return Rituals.memberJoin(params);
+    case 'temple.startChant':
+      return startChant({ manual: true, sutra: params.sutra });
     case 'temple.ttsStatus':
       return zeroTts.getStatus();
     case 'live.connect':
@@ -1211,6 +1439,10 @@ server.listen(PORT, () => {
   console.log(`🎛️ Bảng điều khiển RPC Admin: http://localhost:${PORT}/admin`);
   console.log(`🔌 JSON-RPC 2.0 Endpoint   : http://localhost:${PORT}/rpc (ws://localhost:${PORT}/ws)`);
   console.log(`============================================================`);
+
+  // Theo dõi sang ngày mới / ngày lễ để đổi giao diện Chánh Điện & đọc lời chào
+  checkFestivalChange();
+  setInterval(checkFestivalChange, 60 * 1000);
 
   // Tự động kết nối tới @zenfacts_vn ngay khi khởi động server
   const defaultChannel = process.env.TIKTOK_USER || state.tiktok?.username || 'zenfacts_vn';

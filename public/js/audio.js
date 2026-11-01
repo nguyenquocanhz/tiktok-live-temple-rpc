@@ -350,8 +350,37 @@ class TempleAudioEngine {
     }
   }
 
+  // Tụng kinh tập thể: tạm giữ hàng đợi lời khấn, đọc lần lượt từng dòng kinh
+  async beginChant() {
+    while (this.ttsPlaying) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    this.chanting = true;
+    this.setBgDucking(true);
+  }
+
+  endChant() {
+    this.chanting = false;
+    this.setBgDucking(false);
+    this.processTtsQueue();
+  }
+
+  async playChantLine(text, voice = 'maichi', prefetched = null) {
+    const fallbackMs = Math.max(2500, String(text).length * 90);
+    if (!this.ttsEnabled) {
+      await new Promise((resolve) => setTimeout(resolve, fallbackMs));
+      return;
+    }
+    const res = await (prefetched || this.fetchZeroTtsAudio(text, voice));
+    if (res && res.ok && res.url) {
+      await this.playWavUrl(res.url);
+    } else {
+      await new Promise((resolve) => setTimeout(resolve, fallbackMs));
+    }
+  }
+
   async processTtsQueue() {
-    if (this.ttsPlaying || this.ttsQueue.length === 0) return;
+    if (this.ttsPlaying || this.chanting || this.ttsQueue.length === 0) return;
     this.ttsPlaying = true;
     const item = this.ttsQueue.shift();
 

@@ -45,6 +45,9 @@
         <!-- HÀO QUANG ĐÀI SEN TRÊN TAY ĐỨC PHẬT A DI ĐÀ -->
         <div class="lotus-hand-halo" id="lotusHandHalo"></div>
 
+        <!-- 1C. SẮC MÀU NGÀY LỄ (RẰM, PHẬT ĐẢN, VU LAN, TẾT...) -->
+        <div class="festival-tint" id="festivalTint"></div>
+
         <!-- 2. THANH TRẠNG THÁI MỎNG TRÊN ĐỈNH (KHÔNG CHE TƯỢNG PHẬT) -->
         <header class="minimal-top-bar">
           <div class="live-pill" id="liveStatusPill">
@@ -57,6 +60,13 @@
             </div>
           </div>
         </header>
+
+        <!-- 2B. LỊCH ÂM & NGÀY LỄ HÔM NAY -->
+        <div class="calendar-ribbon" id="calendarRibbon">
+          <span class="calendar-moon" id="calendarMoon">🌙</span>
+          <span id="calendarLunarText">Âm lịch</span>
+          <span class="calendar-festival" id="calendarFestival"></span>
+        </div>
 
         <!-- 3. CỘT SÁNG TÂM HƯƠNG & LƯ HƯƠNG TRUNG TÂM -->
         <div class="sacred-light-beam" id="sacredLightBeam"></div>
@@ -120,6 +130,27 @@
         <!-- 9. LỚP CANVAS HIỆU ỨNG KHÓI HƯƠNG, HOA SEN RƠI & SÓNG ÂM -->
         <canvas id="templeCanvas"></canvas>
 
+        <!-- 9B. MỤC TIÊU CỘNG ĐỒNG: GÓP NHỊP MÕ ĐỂ CẢ ĐẠO TRÀNG CÙNG TỤNG KINH -->
+        <div class="chant-goal-bar" id="chantGoalBar">
+          <div class="chant-goal-fill" id="chantGoalFill"></div>
+          <div class="chant-goal-text">
+            <span>📿 <strong id="chantGoalTitle">Cùng tụng Bát Nhã Tâm Kinh</strong></span>
+            <span id="chantGoalCount">0 / 300 nhịp mõ</span>
+          </div>
+        </div>
+
+        <!-- 9B2. LỜI CHÀO NGƯỜI XEM VỪA VÀO PHÒNG LIVE (ĐẦU THẢM ĐỎ) -->
+        <div class="welcome-toast-layer" id="welcomeToastLayer"></div>
+
+        <!-- 9C. KHUNG CHỮ KINH CHẠY THEO GIỌNG TỤNG -->
+        <div class="chant-panel" id="chantPanel">
+          <div class="chant-panel-title" id="chantPanelTitle">📿 Đạo Tràng Cùng Tụng Kinh</div>
+          <div class="chant-line prev" id="chantLinePrev"></div>
+          <div class="chant-line current" id="chantLineCurrent"></div>
+          <div class="chant-line next" id="chantLineNext"></div>
+          <div class="chant-panel-foot" id="chantPanelFoot"></div>
+        </div>
+
         <!-- 10. THANH HUD GỌN GÀNG DƯỚI ĐÁY (GIỐNG MẪU THAM CHIẾU) -->
         <footer class="bottom-hud-bar">
           <!-- Bên trái: Thông báo hành lễ + 3 ô hướng dẫn tương tác -->
@@ -170,6 +201,13 @@
         <div class="grand-ceremony-banner" id="grandCeremonyBanner">
           <div class="grand-title" id="grandTitle">🐉 ĐẠI LỄ KIM LONG CHẦU PHẬT 🐉</div>
           <div class="grand-sub" id="grandSub">Công đức vô lượng: Đại Thí Chủ dâng lễ</div>
+        </div>
+
+        <!-- BANNER CHÀO MỪNG NGÀY LỄ -->
+        <div class="festival-banner" id="festivalBanner">
+          <div class="festival-banner-title" id="festivalBannerTitle">🌕 NGÀY RẰM 🌕</div>
+          <div class="festival-banner-sub" id="festivalBannerSub"></div>
+          <div class="festival-banner-bonus" id="festivalBannerBonus"></div>
         </div>
 
         <!-- MODAL TỜ GIẢI QUẺ LINH XĂM -->
@@ -246,6 +284,25 @@
         <button class="dock-btn gold" id="btnRpcGrandCeremony">
           🐉 Đại Lễ Kim Long Chầu Phật (Quà Lớn)
         </button>
+      </div>
+
+      <div class="dock-section">
+        <div class="dock-section-title">📅 Lịch Âm, Ngày Lễ & Tụng Kinh</div>
+        <div class="dock-input-row">
+          <select id="selectFestival" class="dock-input">
+            <option value="">Theo lịch âm thật (tự động)</option>
+          </select>
+        </div>
+        <div class="dock-input-row">
+          <select id="selectSutra" class="dock-input">
+            <option value="">Kinh tụng theo lượt (tự động)</option>
+          </select>
+          <button class="dock-btn gold" id="btnStartChant">📿 Tụng Ngay</button>
+        </div>
+        <div class="dock-input-row">
+          <input type="number" id="inputChantGoal" class="dock-input" min="20" step="10" value="300" />
+          <button class="dock-btn" id="btnSetChantGoal">Đặt mục tiêu nhịp mõ</button>
+        </div>
       </div>
 
       <div class="dock-section">

@@ -57,7 +57,10 @@ bun install
 # Tạo môi trường Python .venv và cài đặt ZeroTTS
 uv venv .venv
 uv pip install --python .venv/bin/python zerotts pillow
+# Windows: uv pip install --python .venv\Scripts\python.exe zerotts pillow
 ```
+
+> Chưa cài ZeroTTS thì server vẫn chạy bình thường, chỉ tắt giọng đọc (chữ kinh vẫn chạy theo nhịp ước lượng).
 
 ### 3. Khởi chạy Server
 ```bash
@@ -85,6 +88,37 @@ Mặc định server chạy tại cổng `3000`:
 | **Tặng quà Nhỏ (1–4 xu)** | Hoa hồng (Rose), Heart Me... | Bước lên dâng Đài Hoa Sen Vàng + Thắp 3 nén hương + Đọc lời cảm tạ | `+20` / xu |
 | **Tặng quà Vừa (5–99 xu)** | Đèn lưu ly, Mâm ngũ quả... | Dâng Đèn Lưu Ly / Mâm Ngũ Quả + Thỉnh Chuông + Đọc lời chúc phúc | `+30` / xu |
 | **Tặng quà Lớn (≥ 100 xu)** | Quà ≥ 100 xu | **Đại Lễ Kim Long Chầu Phật**: Mưa hoa sen vàng, Hào quang vạn trượng, Chuông đồng ngân vang | `+50` / xu |
+
+---
+
+### 🙏 Người xem vào phòng Live
+Mỗi người xem vừa vào phòng được `+1` công đức và hiện lời chào *"vừa vào Chánh Điện"* ở đầu thảm đỏ. Mỗi người chỉ được chào 1 lần mỗi 10 phút, cả phòng tối đa 1 lời chào mỗi 2 giây, nên phòng đông người cũng không bị tràn màn hình.
+
+---
+
+## 📅 Lịch Âm & Ngày Lễ Phật Giáo
+
+Chánh Điện tự đổi theo **lịch âm Việt Nam (UTC+7, có tháng nhuận)**. Lịch âm hiện ở góc trên bên trái. Vào ngày lễ, sân khấu đổi sắc màu, hiện banner chào mừng, giọng đọc lời chào và **nhân điểm Công Đức**:
+
+| Ngày (Âm lịch) | Ngày lễ | Công Đức |
+| :--- | :--- | :---: |
+| Mùng 1 – 3 tháng Giêng / Đêm Giao Thừa | Tết Nguyên Đán | `x3` |
+| 15/1 | Rằm Tháng Giêng — Tết Nguyên Tiêu | `x3` |
+| 15/4 | Đại Lễ Phật Đản | `x3` |
+| 15/7 | Đại Lễ Vu Lan Báo Hiếu | `x3` |
+| 17/11 | Vía Đức Phật A Di Đà | `x3` |
+| 19/2, 19/6, 19/9 | Vía Quan Thế Âm Bồ Tát | `x2` |
+| 15/10 · 8/12 | Tết Hạ Nguyên · Phật Thành Đạo | `x2` |
+| Mùng 1 & Rằm hằng tháng | Ngày Sóc Vọng | `x2` |
+
+Ngày đại lễ (`x3`) có thêm mưa hoa sen định kỳ. Trên Bảng Điều Khiển Nhanh có ô **"Xem trước"** để thử giao diện từng ngày lễ, hoặc gọi `temple.setFestival`.
+
+## 📿 Tụng Kinh Tập Thể (Mục Tiêu Cộng Đồng)
+
+Thanh **nhịp mõ** phía trên HUD gom tương tác của cả phòng: mỗi tim = 1 nhịp, mỗi bình luận nghi thức = 5, thỉnh chuông = 10, mỗi xu quà = 5. Khi đủ mục tiêu (mặc định `300`, đổi được trên Dock), cả Đạo Tràng cùng tụng kinh:
+- Chữ kinh chạy theo giọng đọc ZeroTTS, có tiếng mõ theo từng câu, chuông mở đầu và kết thúc, Phật tử hai bên cùng vái lạy.
+- Xoay vòng **Bát Nhã Tâm Kinh**, **Niệm Hồng Danh A Di Đà**, **Chú Vãng Sanh** (ngày vía A Di Đà ưu tiên niệm Phật, Vu Lan ưu tiên Chú Vãng Sanh). Bài nào cũng kết thúc bằng bài **Hồi Hướng**.
+- Cuối buổi tụng đọc tên những người góp nhiều nhịp mõ nhất. Mỗi người góp mõ được thưởng `+20` công đức (nhân theo ngày lễ).
 
 ---
 
@@ -144,6 +178,11 @@ curl -X POST http://localhost:3000/rpc \
 - `temple.grandCeremony`: Kích hoạt Đại Lễ Kim Long Chầu Phật (`user`, `coins`, `giftName`).
 - `temple.updateSettings`: Cập nhật âm lượng nhạc nền (`musicVolume`), giọng đọc (`ttsVolume`), bật/tắt TTS.
 - `temple.resetMerit`: Đặt lại bảng thống kê Công Đức.
+- `temple.getCalendar`: Lịch âm hôm nay, ngày lễ, hệ số công đức, danh sách ngày lễ & bài kinh.
+- `temple.setFestival`: Xem trước giao diện một ngày lễ (`key`, để trống = theo lịch thật).
+- `temple.startChant`: Bắt đầu tụng kinh ngay (`sutra`: `batNha` | `niemPhat` | `vangSanh`, tùy chọn).
+- `temple.memberJoin`: Giả lập người xem vào phòng (`user`, `uniqueId`, `avatar`).
+- `temple.updateSettings` cũng nhận `chantGoal` (số nhịp mõ cần cho mỗi buổi tụng).
 - `live.connect` / `live.disconnect`: Kết nối / Ngắt kết nối phòng TikTok Live.
 
 ---
@@ -153,6 +192,8 @@ curl -X POST http://localhost:3000/rpc \
 ```text
 ├── server.js                  # Bun.js HTTP + WebSocket JSON-RPC 2.0 Server & TikTok Live Connector
 ├── tts_worker.py              # Tiến trình Python ZeroTTS thường trú (48kHz, chống rè/clipping, lọc ký tự lạ)
+├── lunar.js                   # Đổi Dương lịch -> Âm lịch Việt Nam & danh sách ngày lễ Phật giáo
+├── chants.js                  # Kinh tụng tập thể (phiên âm Hán Việt) & bài Hồi Hướng
 ├── data/
 │   ├── merit-state.json       # Lưu trữ bền vững Bảng Vàng Công Đức của người xem thật
 │   └── tts-cache/             # Bộ đệm file âm thanh WAV đã tổng hợp
