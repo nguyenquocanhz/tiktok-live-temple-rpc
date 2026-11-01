@@ -510,7 +510,7 @@
         pulseHallBowing();
         particles.spawnBellWave(540, 510, 4);
         particles.spawnFloatingMerit(`+${ev.merit} Công Đức`, 190, 935, '#fff3b0');
-        updateCentralWorshipper(ev.user, ev.avatar, `🔔 Thỉnh Đại Hồng Chung (+${ev.merit} CĐ)`, ev.wish);
+        updateCentralWorshipper(ev.user, ev.avatar, `🔔 ${ev.actionLabel || 'Thỉnh Đại Hồng Chung'} (+${ev.merit} CĐ)`, ev.wish);
         break;
       }
 

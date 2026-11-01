@@ -91,6 +91,14 @@ Mặc định server chạy tại cổng `3000`:
 
 ---
 
+### 🎁 Quà tặng & Lời cảm ơn (chỉnh trên `/admin`, mục 5)
+- **Mốc quà:** quà vừa từ `5` xu, quà lớn từ `100` xu (Đại Lễ Kim Long). Đổi được trên Admin.
+- **Lời cảm ơn riêng** cho quà nhỏ / vừa / lớn, follow và share. Biến dùng được: `{user}`, `{gift}`, `{count}`, `{coins}`, `{merit}`.
+- **Quà combo** (ví dụ 10 bông hồng liên tiếp) được gom lại và chỉ cảm ơn **1 lần** với tổng số lượng (*"đã dâng 10 Hoa Hồng"*).
+- **Follow / Share:** thỉnh chuông và đọc lời cảm ơn, mỗi người tối đa 1 lần mỗi 2 phút cho từng loại.
+- Bật/tắt giọng đọc từng loại, đặt số xu tối thiểu để đọc cảm ơn (tránh nghẽn hàng đợi giọng đọc khi phòng đông).
+- Có nút **Thử quà / Thử follow / Thử share** trên Admin để nghe thử trước khi live.
+
 ### 🙏 Người xem vào phòng Live
 Mỗi người xem vừa vào phòng được `+1` công đức và hiện lời chào *"vừa vào Chánh Điện"* ở đầu thảm đỏ. Mỗi người chỉ được chào 1 lần mỗi 10 phút, cả phòng tối đa 1 lời chào mỗi 2 giây, nên phòng đông người cũng không bị tràn màn hình.
 
@@ -182,6 +190,9 @@ curl -X POST http://localhost:3000/rpc \
 - `temple.setFestival`: Xem trước giao diện một ngày lễ (`key`, để trống = theo lịch thật).
 - `temple.startChant`: Bắt đầu tụng kinh ngay (`sutra`: `batNha` | `niemPhat` | `vangSanh`, tùy chọn).
 - `temple.memberJoin`: Giả lập người xem vào phòng (`user`, `uniqueId`, `avatar`).
+- `temple.getThanks` / `temple.updateThanks`: Đọc / lưu cấu hình quà & lời cảm ơn (`reset: true` để về mặc định).
+- `temple.simulateGift`: Giả lập quà TikTok (`giftName`, `diamondCount`, `repeatCount`, `streakable`, `repeatEnd`).
+- `temple.simulateSocial`: Giả lập follow / share (`kind`: `follow` | `share`).
 - `temple.updateSettings` cũng nhận `chantGoal` (số nhịp mõ cần cho mỗi buổi tụng).
 - `live.connect` / `live.disconnect`: Kết nối / Ngắt kết nối phòng TikTok Live.
 

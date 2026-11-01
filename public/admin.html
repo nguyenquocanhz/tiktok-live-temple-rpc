@@ -77,8 +77,11 @@
     }
     .grid {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
       gap: 20px;
+    }
+    .grid > * {
+      min-width: 0;
     }
     .card {
       background: var(--card);
@@ -113,6 +116,49 @@
       display: grid;
       grid-template-columns: repeat(2, 1fr);
       gap: 10px;
+    }
+    .card.wide {
+      grid-column: 1 / -1;
+    }
+    .thanks-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .gift-test-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .field textarea {
+      min-height: 74px;
+      resize: vertical;
+    }
+    .toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+      color: var(--text);
+    }
+    .toggle input {
+      width: 18px;
+      height: 18px;
+      accent-color: var(--gold);
+    }
+    .hint {
+      font-size: 13px;
+      color: var(--muted);
+    }
+    @media (max-width: 900px) {
+      .grid, .thanks-grid, .gift-test-grid { grid-template-columns: minmax(0, 1fr); }
     }
     pre {
       background: #0b0202;
@@ -185,6 +231,58 @@
         </p>
       </section>
 
+      <section class="card wide">
+        <h2>🎁 5. Quà Tặng & Lời Cảm Ơn Người Xem</h2>
+        <p class="hint">
+          Biến dùng trong lời cảm ơn: <code>{user}</code> tên người xem, <code>{gift}</code> tên quà (kèm số lượng nếu tặng combo),
+          <code>{count}</code> số lượng, <code>{coins}</code> tổng xu, <code>{merit}</code> điểm công đức. Quà combo được gom lại và chỉ cảm ơn 1 lần.
+        </p>
+        <div class="thanks-grid">
+          <label class="field">Quà vừa từ (xu)
+            <input type="number" id="thMediumCoins" min="1" />
+          </label>
+          <label class="field">Quà lớn từ (xu) — kích hoạt Đại Lễ Kim Long
+            <input type="number" id="thLargeCoins" min="2" />
+          </label>
+          <label class="field">Chỉ đọc lời cảm ơn khi quà từ (xu)
+            <input type="number" id="thMinVoice" min="1" />
+          </label>
+        </div>
+        <div class="thanks-grid">
+          <label class="field">🌹 Cảm ơn quà nhỏ
+            <textarea id="thGiftSmall"></textarea>
+          </label>
+          <label class="field">🍑 Cảm ơn quà vừa
+            <textarea id="thGiftMedium"></textarea>
+          </label>
+          <label class="field">🐉 Cảm ơn quà lớn
+            <textarea id="thGiftLarge"></textarea>
+          </label>
+          <label class="field">➕ Cảm ơn theo dõi (follow)
+            <textarea id="thFollowText"></textarea>
+          </label>
+          <label class="field">🔗 Cảm ơn chia sẻ (share)
+            <textarea id="thShareText"></textarea>
+          </label>
+          <div class="field">Bật / tắt giọng đọc cảm ơn
+            <label class="toggle"><input type="checkbox" id="thGiftVoice" /> Đọc cảm ơn khi tặng quà</label>
+            <label class="toggle"><input type="checkbox" id="thFollowVoice" /> Đọc cảm ơn khi theo dõi</label>
+            <label class="toggle"><input type="checkbox" id="thShareVoice" /> Đọc cảm ơn khi chia sẻ</label>
+          </div>
+        </div>
+        <div class="row">
+          <button class="btn gold" id="btnSaveThanks">💾 Lưu Cấu Hình</button>
+          <button class="btn" id="btnResetThanks">↺ Khôi Phục Mặc Định</button>
+        </div>
+        <div class="gift-test-grid">
+          <button class="btn" onclick="sendRpc('temple.simulateGift', { giftName: 'Hoa Hồng', diamondCount: 1, repeatCount: 3 })">🌹 Thử 3 Hoa Hồng</button>
+          <button class="btn" onclick="sendRpc('temple.simulateGift', { giftName: 'Bánh Donut', diamondCount: 30, repeatCount: 1, streakable: false })">🍩 Thử quà vừa (30 xu)</button>
+          <button class="btn gold" onclick="sendRpc('temple.simulateGift', { giftName: 'Sư Tử', diamondCount: 29999, repeatCount: 1, streakable: false })">🦁 Thử quà lớn</button>
+          <button class="btn" onclick="sendRpc('temple.simulateSocial', { kind: 'follow' })">➕ Thử follow</button>
+          <button class="btn" onclick="sendRpc('temple.simulateSocial', { kind: 'share' })">🔗 Thử share</button>
+        </div>
+      </section>
+
       <section class="card">
         <h2>🔌 4. Nhật Ký Phản Hồi JSON-RPC 2.0 (`/rpc`)</h2>
         <pre id="rpcOutput">{ "status": "Sẵn sàng nhận lệnh JSON-RPC 2.0" }</pre>
@@ -231,6 +329,42 @@
         player.play().catch(() => {});
       }
     };
+
+    const THANKS_FIELDS = {
+      mediumCoins: 'thMediumCoins',
+      largeCoins: 'thLargeCoins',
+      giftMinCoinsForVoice: 'thMinVoice',
+      giftSmall: 'thGiftSmall',
+      giftMedium: 'thGiftMedium',
+      giftLarge: 'thGiftLarge',
+      followText: 'thFollowText',
+      shareText: 'thShareText'
+    };
+    const THANKS_TOGGLES = { giftVoice: 'thGiftVoice', followVoice: 'thFollowVoice', shareVoice: 'thShareVoice' };
+
+    function fillThanksForm(cfg) {
+      if (!cfg) return;
+      Object.entries(THANKS_FIELDS).forEach(([key, id]) => { document.getElementById(id).value = cfg[key] ?? ''; });
+      Object.entries(THANKS_TOGGLES).forEach(([key, id]) => { document.getElementById(id).checked = Boolean(cfg[key]); });
+    }
+
+    async function loadThanks() {
+      const data = await sendRpc('temple.getThanks', {});
+      fillThanksForm(data?.result);
+    }
+
+    document.getElementById('btnSaveThanks').onclick = async () => {
+      const params = {};
+      Object.entries(THANKS_FIELDS).forEach(([key, id]) => { params[key] = document.getElementById(id).value; });
+      Object.entries(THANKS_TOGGLES).forEach(([key, id]) => { params[key] = document.getElementById(id).checked; });
+      const data = await sendRpc('temple.updateThanks', params);
+      fillThanksForm(data?.result);
+    };
+    document.getElementById('btnResetThanks').onclick = async () => {
+      const data = await sendRpc('temple.updateThanks', { reset: true });
+      fillThanksForm(data?.result);
+    };
+    loadThanks();
 
     async function refreshStatus() {
       const res = await fetch('/api/state');

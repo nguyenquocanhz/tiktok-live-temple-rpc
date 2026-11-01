@@ -287,7 +287,8 @@ const DEFAULT_STATE = {
     autoSim: false,
     autoSimIntervalMs: 9500,
     chantGoal: 300,
-    festivalOverride: ''
+    festivalOverride: '',
+    thanks: {}
   },
   chant: {
     progress: 0,
@@ -480,6 +481,146 @@ function getPublicState() {
   };
 }
 
+
+// ============================================================================
+// 3A. CẤU HÌNH QUÀ TẶNG & LỜI CẢM ƠN (chỉnh trên Admin, lưu trong merit-state.json)
+// ============================================================================
+// Biến trong mẫu: {user} tên người xem, {gift} tên quà, {count} số lượng, {coins} tổng xu, {merit} điểm công đức
+const DEFAULT_THANKS = {
+  giftVoice: true,
+  giftMinCoinsForVoice: 1,
+  mediumCoins: 5,
+  largeCoins: 100,
+  giftSmall: 'Cảm tạ thí chủ {user} đã dâng {gift}, tích thêm {merit} điểm công đức. Nguyện chư Phật gia hộ cho thí chủ bình an may mắn.',
+  giftMedium: 'Công đức vô lượng! Cảm tạ thí chủ {user} đã phát tâm dâng {gift}. Nguyện cầu chư Phật gia hộ cho thí chủ vạn sự cát tường như ý.',
+  giftLarge: 'Nam Mô A Di Đà Phật! Đại thí chủ {user} đã dâng {gift}, công đức vô lượng. Toàn thể đạo tràng xin cảm tạ, nguyện thí chủ phúc lộc viên mãn, gia đạo hưng long.',
+  followVoice: true,
+  followText: 'Cảm tạ thí chủ {user} đã theo dõi Chùa Linh Ứng. Nguyện thí chủ luôn bình an, mọi điều như ý.',
+  shareVoice: true,
+  shareText: 'Cảm tạ thí chủ {user} đã chia sẻ buổi lễ, công đức lan tỏa muôn nơi.'
+};
+const THANKS_TEXT_KEYS = ['giftSmall', 'giftMedium', 'giftLarge', 'followText', 'shareText'];
+
+function getThanksConfig() {
+  return { ...DEFAULT_THANKS, ...(state.settings.thanks || {}) };
+}
+
+function updateThanksConfig(params = {}) {
+  const next = { ...(state.settings.thanks || {}) };
+  for (const key of THANKS_TEXT_KEYS) {
+    if (typeof params[key] === 'string') {
+      const text = params[key].replace(/\s+/g, ' ').trim().slice(0, 300);
+      if (text) next[key] = text;
+      else delete next[key];
+    }
+  }
+  for (const key of ['giftVoice', 'followVoice', 'shareVoice']) {
+    if (typeof params[key] === 'boolean') next[key] = params[key];
+  }
+  for (const key of ['giftMinCoinsForVoice', 'mediumCoins', 'largeCoins']) {
+    if (params[key] !== undefined && Number.isFinite(Number(params[key]))) {
+      next[key] = Math.max(1, Math.round(Number(params[key])));
+    }
+  }
+  if (next.largeCoins !== undefined || next.mediumCoins !== undefined) {
+    const merged = { ...DEFAULT_THANKS, ...next };
+    if (merged.largeCoins <= merged.mediumCoins) next.largeCoins = merged.mediumCoins + 1;
+  }
+  if (params.reset === true) {
+    state.settings.thanks = {};
+  } else {
+    state.settings.thanks = next;
+  }
+  saveState();
+  broadcastNotification('temple.state', getPublicState());
+  return getThanksConfig();
+}
+
+function fillThanksTemplate(template, vars) {
+  return String(template || '').replace(/\{(user|gift|count|coins|merit)\}/g, (_, key) => String(vars[key] ?? ''));
+}
+
+function getGiftTier(coins) {
+  const cfg = getThanksConfig();
+  if (coins >= cfg.largeCoins) return 'large';
+  if (coins >= cfg.mediumCoins) return 'medium';
+  return 'small';
+}
+
+// Quà combo (giftType = 1) được TikTok gửi nhiều lần với repeatCount tăng dần, kết thúc bằng repeatEnd.
+// Gom lại để chỉ dâng lễ & cảm ơn 1 lần với tổng số lượng; tự chốt sau 4 giây nếu không nhận được repeatEnd.
+const giftStreaks = new Map();
+
+function handleIncomingGift(info) {
+  const count = Math.max(1, Number(info.repeatCount) || 1);
+  if (!info.streakable) {
+    return finalizeGift({ ...info, repeatCount: count });
+  }
+  const key = info.streakKey || `${info.uniqueId || info.user}_${info.giftId}`;
+  const existing = giftStreaks.get(key);
+  if (existing) clearTimeout(existing.timer);
+  const streak = { ...(existing || {}), ...info, repeatCount: Math.max(count, existing?.repeatCount || 0) };
+  if (info.repeatEnd) {
+    giftStreaks.delete(key);
+    return finalizeGift(streak);
+  }
+  streak.timer = setTimeout(() => {
+    giftStreaks.delete(key);
+    finalizeGift(streak);
+  }, 4000);
+  giftStreaks.set(key, streak);
+  if (giftStreaks.size > 500) {
+    const [oldKey, old] = giftStreaks.entries().next().value;
+    clearTimeout(old.timer);
+    giftStreaks.delete(oldKey);
+    finalizeGift(old);
+  }
+  return { pending: true, repeatCount: streak.repeatCount };
+}
+
+function finalizeGift(info) {
+  const count = Math.max(1, Number(info.repeatCount) || 1);
+  const unitCoins = Math.max(1, Number(info.diamondCount) || 1);
+  const rawName = String(info.giftName || 'Hoa Hồng').slice(0, 40);
+  const giftName = count > 1 ? `${count} ${rawName}` : rawName;
+  console.log(`[TikTok Gift] ${info.user} tặng ${giftName} (${unitCoins * count} xu)`);
+  return Rituals.offerGift({
+    user: info.user,
+    uniqueId: info.uniqueId,
+    avatar: info.avatar,
+    coins: unitCoins * count,
+    giftCount: count,
+    giftName,
+    wish: `Thành tâm dâng ${giftName} kính lễ Đức Phật A Di Đà`
+  });
+}
+
+// Follow / Share: cảm ơn bằng giọng đọc, mỗi người 1 lần mỗi 2 phút cho từng loại để không nghẽn hàng đợi
+const socialThanksCooldown = new Map();
+
+function handleSocialThanks(kind, { user, uniqueId, avatar }) {
+  const cfg = getThanksConfig();
+  const key = `${kind}:${uniqueId || user}`;
+  const now = Date.now();
+  const canSpeak = now - (socialThanksCooldown.get(key) || 0) > 120000;
+  const voiceOn = kind === 'follow' ? cfg.followVoice : cfg.shareVoice;
+  if (canSpeak) {
+    socialThanksCooldown.set(key, now);
+    if (socialThanksCooldown.size > 2000) {
+      socialThanksCooldown.delete(socialThanksCooldown.keys().next().value);
+    }
+  }
+  const template = kind === 'follow' ? cfg.followText : cfg.shareText;
+  return Rituals.ringBell({
+    user,
+    uniqueId,
+    avatar,
+    count: 1,
+    wish: kind === 'follow' ? 'Theo dõi Chùa Linh Ứng, kết duyên lành nơi cửa Phật' : 'Chia sẻ buổi lễ, lan tỏa công đức muôn nơi',
+    actionLabel: kind === 'follow' ? 'Theo dõi Chùa' : 'Chia sẻ buổi lễ',
+    ttsTemplate: voiceOn && canSpeak ? template : ''
+  });
+}
 
 // ============================================================================
 // 3B. LỊCH ÂM, NGÀY LỄ PHẬT GIÁO & TỤNG KINH TẬP THỂ
@@ -724,9 +865,12 @@ const Rituals = {
     const devotee = recordDevotee(user, uniqueId, avatar, merit, 0, 0, wish);
     addChantProgress(count * 10, devotee);
 
-    const ttsText = params.readTts
-      ? `Thí chủ ${devotee.name} thỉnh Đại Hồng Chung cầu nguyện: ${wish}.`
-      : '';
+    let ttsText = '';
+    if (params.ttsTemplate) {
+      ttsText = fillThanksTemplate(params.ttsTemplate, { user: devotee.name, merit, count });
+    } else if (params.readTts) {
+      ttsText = `Thí chủ ${devotee.name} thỉnh Đại Hồng Chung cầu nguyện: ${wish}.`;
+    }
 
     const event = pushEventLog({
       type: 'ringBell',
@@ -736,6 +880,7 @@ const Rituals = {
       count,
       merit,
       wish,
+      actionLabel: params.actionLabel || '',
       ttsText,
       ttsVoice: state.settings.ttsVoice || 'maichi'
     });
@@ -781,9 +926,10 @@ const Rituals = {
     const uniqueId = params.uniqueId || '';
     const avatar = params.avatar || '';
     const coins = Math.max(1, Number(params.coins) || 10);
+    const tier = getGiftTier(coins);
     const giftType = ['lotus', 'fruit', 'lamp', 'dragon'].includes(params.giftType)
       ? params.giftType
-      : (coins >= 100 ? 'dragon' : coins >= 20 ? 'fruit' : coins >= 5 ? 'lamp' : 'lotus');
+      : (tier === 'large' ? 'dragon' : tier === 'medium' ? (coins >= 20 ? 'fruit' : 'lamp') : 'lotus');
 
     const giftLabels = {
       lotus: 'Đài Hoa Sen Vàng',
@@ -792,7 +938,7 @@ const Rituals = {
       dragon: 'Đại Lễ Kim Long Chầu Phật'
     };
     const giftName = params.giftName || giftLabels[giftType];
-    const multiplier = coins >= 100 ? 50 : coins >= 10 ? 30 : 20;
+    const multiplier = tier === 'large' ? 50 : tier === 'medium' ? 30 : 20;
     const merit = festivalMerit(Math.max(20, coins * multiplier));
 
     state.offerings[giftType] = (state.offerings[giftType] || 0) + 1;
@@ -803,9 +949,12 @@ const Rituals = {
     const devotee = recordDevotee(user, uniqueId, avatar, merit, 3, 1, wish);
     addChantProgress(coins * 5, devotee);
 
-    const ttsText = params.readTts === false
-      ? ''
-      : `Công đức vô lượng! Cảm tạ thí chủ ${devotee.name} đã phát tâm dâng cúng ${giftName}, tích thêm ${merit} điểm công đức. Nguyện cầu chư Phật gia hộ cho thí chủ vạn sự cát tường như ý.`;
+    const thanks = getThanksConfig();
+    const tierTemplate = { small: thanks.giftSmall, medium: thanks.giftMedium, large: thanks.giftLarge }[tier];
+    const speak = params.readTts !== false && thanks.giftVoice && coins >= thanks.giftMinCoinsForVoice;
+    const ttsText = speak
+      ? fillThanksTemplate(tierTemplate, { user: devotee.name, gift: giftName, count: params.giftCount || 1, coins, merit })
+      : '';
 
     const event = pushEventLog({
       type: giftType === 'dragon' ? 'grandCeremony' : 'offerGift',
@@ -814,6 +963,7 @@ const Rituals = {
       avatar: devotee.avatar,
       giftType,
       giftName,
+      giftTier: tier,
       coins,
       merit,
       wish,
@@ -1029,7 +1179,6 @@ function parseViewerComment(commentText, user, uniqueId, avatar) {
   return Rituals.burnIncense({ user: cleanUser, uniqueId, avatar, count: 1, wish: cleanWish });
 }
 
-const giftComboTracker = new Map();
 
 async function resolveTikTokUsername(rawInput) {
   let input = String(rawInput || '').trim();
@@ -1147,60 +1296,25 @@ async function connectTikTokLive(usernameOrUrl) {
     Rituals.strikeWoodenFish({ user, uniqueId, avatar, count: likeCount });
   });
 
-  const handleSocialEvent = (data) => {
-    const { user, uniqueId, avatar } = extractUserFromEvent(data);
-    Rituals.ringBell({
-      user,
-      uniqueId,
-      avatar,
-      count: 1,
-      wish: 'Hữu duyên tương ngộ nơi cửa Phật, cầu bình an may mắn',
-      readTts: false
-    });
-  };
-  tiktokConn.on(WebcastEvent.FOLLOW, handleSocialEvent);
-  tiktokConn.on(WebcastEvent.SHARE, handleSocialEvent);
-  tiktokConn.on(WebcastEvent.SOCIAL, (data) => {
-    const action = String(data?.action || '');
-    const disp = String(data?.common?.displayText?.displayType || data?.displayType || '').toLowerCase();
-    if (action === '1' || action === '3' || disp.includes('follow') || disp.includes('share')) {
-      handleSocialEvent(data);
-    }
-  });
+  // FOLLOW / SHARE là sự kiện SOCIAL đã được thư viện tách sẵn: chỉ nghe 2 sự kiện này để không cảm ơn trùng
+  tiktokConn.on(WebcastEvent.FOLLOW, (data) => handleSocialThanks('follow', extractUserFromEvent(data)));
+  tiktokConn.on(WebcastEvent.SHARE, (data) => handleSocialThanks('share', extractUserFromEvent(data)));
 
   tiktokConn.on(WebcastEvent.GIFT, (data) => {
     const { user, uniqueId, avatar } = extractUserFromEvent(data);
-    const giftObj = data?.gift || data?.giftDetails || {};
-    const giftId = String(data?.giftId || giftObj?.id || 'rose');
-    const groupId = String(data?.groupId || `${uniqueId}_${giftId}`);
-    const repeatCount = Math.max(1, Number(data?.repeatCount || data?.comboCount || 1));
-
-    const prevCount = giftComboTracker.get(groupId) || 0;
-    if (repeatCount <= prevCount && data?.repeatEnd) {
-      giftComboTracker.delete(groupId);
-      return;
-    }
-    const deltaCount = Math.max(1, repeatCount - prevCount);
-    giftComboTracker.set(groupId, repeatCount);
-    if (giftComboTracker.size > 500) {
-      const firstKey = giftComboTracker.keys().next().value;
-      giftComboTracker.delete(firstKey);
-    }
-
-    const diamondCount = Math.max(1, Number(giftObj?.diamondCount || data?.diamondCount || 1));
-    const totalCoins = diamondCount * deltaCount;
-    const rawGiftName = giftObj?.name || data?.giftName || giftObj?.describe || 'Hoa Hồng Tâm Thành';
-    const displayGiftName = deltaCount > 1 ? `${deltaCount}x ${rawGiftName}` : rawGiftName;
-
-    console.log(`[TikTok Gift] ${user} gửi ${displayGiftName} (${totalCoins} xu)`);
-
-    Rituals.offerGift({
+    const details = data?.giftDetails || data?.gift || {};
+    const giftId = String(data?.giftId || details?.id || 'gift');
+    handleIncomingGift({
       user,
       uniqueId,
       avatar,
-      coins: totalCoins,
-      giftName: displayGiftName,
-      wish: `Thành tâm dâng ${displayGiftName} kính lễ Đức Phật A Di Đà`
+      giftId,
+      giftName: details?.giftName || details?.name || data?.giftName || 'Hoa Hồng',
+      diamondCount: Number(details?.diamondCount || data?.diamondCount || 1),
+      streakable: Number(details?.giftType ?? data?.giftType) === 1,
+      repeatCount: Number(data?.repeatCount || 1),
+      repeatEnd: Boolean(Number(data?.repeatEnd || 0)),
+      streakKey: data?.groupId ? `${uniqueId}_${giftId}_${data.groupId}` : ''
     });
   });
 
@@ -1321,6 +1435,28 @@ async function handleRpcCall(method, params = {}) {
       };
     case 'temple.setFestival':
       return Rituals.updateSettings({ festivalOverride: FESTIVALS[params.key] ? params.key : '' });
+    case 'temple.getThanks':
+      return getThanksConfig();
+    case 'temple.updateThanks':
+      return updateThanksConfig(params);
+    case 'temple.simulateGift':
+      return handleIncomingGift({
+        user: params.user || 'Thí Chủ Thử Quà',
+        uniqueId: params.uniqueId || '',
+        avatar: params.avatar || '',
+        giftId: params.giftId || String(params.giftName || 'rose'),
+        giftName: params.giftName || 'Hoa Hồng',
+        diamondCount: Number(params.diamondCount) || 1,
+        streakable: params.streakable !== false,
+        repeatCount: Number(params.repeatCount) || 1,
+        repeatEnd: params.repeatEnd !== false
+      });
+    case 'temple.simulateSocial':
+      return handleSocialThanks(params.kind === 'share' ? 'share' : 'follow', {
+        user: params.user || 'Thí Chủ Hữu Duyên',
+        uniqueId: params.uniqueId || '',
+        avatar: params.avatar || ''
+      });
     case 'temple.memberJoin':
       return Rituals.memberJoin(params);
     case 'temple.startChant':
