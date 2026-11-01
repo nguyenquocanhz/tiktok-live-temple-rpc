@@ -138,7 +138,9 @@ class ZeroTTSManager {
     try {
       this.proc = spawn(pyBin, [scriptPath], {
         cwd: __dirname,
-        stdio: ['pipe', 'pipe', 'pipe']
+        stdio: ['pipe', 'pipe', 'pipe'],
+        // Windows mặc định đọc/ghi pipe bằng cp1252: ép UTF-8 để tiếng Việt không bị lỗi mã
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1', HF_HUB_DISABLE_SYMLINKS_WARNING: '1' }
       });
     } catch (err) {
       // Bun ném lỗi ngay khi không tìm thấy Python: chạy tiếp không có giọng đọc thay vì sập server
@@ -195,6 +197,7 @@ class ZeroTTSManager {
         this.model = msg.model || this.model;
         console.log(`[ZeroTTS] Sẵn sàng sau ${msg.loadSec}s! Giọng: ${this.voice} (${this.voices.join(', ')})`);
         broadcastNotification('tts.status', this.getStatus());
+        setTimeout(warmChantCache, 1500);
       } else if (msg.type === 'result' && msg.id != null) {
         const entry = this.pending.get(msg.id);
         if (entry) {
@@ -613,6 +616,26 @@ function startChant(params = {}) {
   saveState();
   broadcastNotification('temple.event', { event, state: getPublicState() });
   return { event, state: getPublicState() };
+}
+
+// Tổng hợp sẵn giọng đọc mọi câu kinh vào tts-cache (chạy nền, tuần tự từng câu):
+// ZeroTTS trên CPU tổng hợp chậm hơn thời gian đọc, nếu không làm trước thì buổi tụng sẽ bị ngắt quãng
+let chantWarmRunning = false;
+async function warmChantCache() {
+  if (chantWarmRunning) return;
+  chantWarmRunning = true;
+  const voice = state.settings.ttsVoice || 'maichi';
+  const lines = [...new Set([...SUTRAS.flatMap((s) => s.lines), ...DEDICATION_LINES])];
+  let created = 0;
+  for (const line of lines) {
+    if (!zeroTts.ready) break;
+    const res = await zeroTts.synthesize(line, voice);
+    if (res.ok && !res.cached) created += 1;
+  }
+  chantWarmRunning = false;
+  if (created > 0) {
+    console.log(`[ZeroTTS] Đã tạo sẵn giọng tụng cho ${created} câu kinh (${lines.length} câu đã sẵn sàng).`);
+  }
 }
 
 function finishChant() {
